@@ -1,0 +1,21 @@
+{
+  "schema_version": "resource.v1",
+  "dataset": "reference_resources",
+  "records": [
+    {
+      "id": "resource-001",
+      "name": "Ledger Lens",
+      "category": "developer-tools",
+      "observed_at": "2026-09-01T00:00:00Z",
+      "source_url": "https://example.invalid/resources/ledger-lens"
+    },
+    {
+      "id": "resource-002",
+      "name": "Field Atlas",
+      "category": "data-tools",
+      "observed_at": "2026-09-01T00:00:00Z",
+      "source_url": "https://example.invalid/resources/field-atlas"
+    }
+  ]
+}
+

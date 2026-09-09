@@ -1,0 +1,10 @@
+{
+  "manifest_version": "1",
+  "source": "local-sanitized-fixture",
+  "dataset": "reference_resources",
+  "source_object": "data/landing/source_records.json",
+  "bronze_object": "data/bronze/resource_records.v1.json",
+  "source_sha256": "5403c5b74c871c469d8128816f2ad7fd6ef9bc03da026f6437857d112b1090d5",
+  "bronze_sha256": "c8338ad2df1414afcfdc6967974a05feaf6830dd669b3d3b15616c0f74dd922e",
+  "record_count": 2
+}
