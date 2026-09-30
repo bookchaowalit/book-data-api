@@ -34,6 +34,18 @@ make check
 make demo
 ```
 
+ตรวจแบบเดียวกับ CI (`.github/workflows/ci.yml`, Python 3.11/3.12):
+
+```bash
+python -m pip install "pytest>=7" "ruff>=0.5"
+ruff check .
+python -m pytest -q
+make check && make demo
+```
+
+test ที่ทดสอบ fixture เสียหายจะคัดลอก `data/` ไปยัง temporary directory ก่อน
+จึงไม่แก้ไฟล์ fixture จริง และ CI ตรวจซ้ำด้วย `git diff --exit-code -- data`
+
 เปิด HTTP server โดยสร้าง token เฉพาะ runtime ใน shell:
 
 ```bash
@@ -60,7 +72,9 @@ curl -H "Authorization: Bearer $BOOK_DATA_API_TOKEN" \
 - `GET /v1/metadata` แสดง schema, count และ lineage
 - `GET /v1/records` รองรับ `category`, `limit` และ `offset`
 - `GET /v1/records/{id}` อ่าน record เดียวตาม id
-- method ที่เปลี่ยนข้อมูลตอบ `405` และ `Allow: GET`
+- รองรับ `HEAD` เหมือน `GET` แต่ไม่ส่ง body; method ที่เปลี่ยนข้อมูลตอบ `405` และ
+  `Allow: GET, HEAD`
+- rate limit ต่อ client อยู่ในหน่วยความจำ และล้าง client ที่ไม่ active แล้วอัตโนมัติ
 - ข้อมูลที่ผิด contract หรือ digest ไม่ตรง manifest จะ fail closed
 - token ไม่อยู่ใน source, fixture หรือ manifest และไม่มี dependency ภายนอก
 
