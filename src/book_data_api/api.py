@@ -12,7 +12,7 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .config import API_VERSION, APP_NAME
-from .schema import DataContractError, error_payload
+from .schema import error_payload
 from .store import Dataset, load_dataset
 
 
@@ -24,7 +24,11 @@ class Response:
 
 
 class _RateLimiter:
-    def __init__(self, max_requests: int, window_seconds: float = 60.0) -> None:
+    # Idle clients are swept once this many are tracked, so unique client ids
+    # (for example many source addresses) cannot grow memory without bound.
+    sweep_threshold = 1024
+
+    def __init__(self, max_requests: int, window_seconds: float = 60) -> None:
         if max_requests < 1:
             raise ValueError("max_requests must be positive")
         self.max_requests = max_requests
@@ -35,6 +39,8 @@ class _RateLimiter:
     def allow(self, client_id: str) -> tuple[bool, int]:
         now = time.monotonic()
         with self._lock:
+            if len(self._events) >= self.sweep_threshold and client_id not in self._events:
+                self._sweep(now)
             events = [event for event in self._events.get(client_id, []) if now - event < self.window_seconds]
             if len(events) >= self.max_requests:
                 retry_after = max(1, int(self.window_seconds - (now - events[0])))
@@ -43,6 +49,18 @@ class _RateLimiter:
             events.append(now)
             self._events[client_id] = events
             return True, 0
+
+    def _sweep(self, now: float) -> None:
+        for key in list(self._events):
+            recent = [event for event in self._events[key] if now - event < self.window_seconds]
+            if recent:
+                self._events[key] = recent
+            else:
+                del self._events[key]
+
+    def tracked_clients(self) -> int:
+        with self._lock:
+            return len(self._events)
 
 
 class ApiService:
@@ -106,7 +124,9 @@ class ApiService:
         if not allowed:
             return self._response(
                 429,
-                error_payload("RATE001", "rate limit exceeded", {"window_seconds": 60}),
+                error_payload(
+                    "RATE001", "rate limit exceeded", {"window_seconds": self._rate_limiter.window_seconds}
+                ),
                 **{"Retry-After": str(retry_after)},
             )
 
@@ -115,8 +135,9 @@ class ApiService:
         method = method.upper()
         if path not in {"/healthz", "/v1/metadata", "/v1/records"} and not path.startswith("/v1/records/"):
             return self._response(404, error_payload("API404", "route not found"))
-        if method != "GET":
-            return self._response(405, error_payload("API405", "this API is read-only"), **{"Allow": "GET"})
+        # HEAD is the body-less form of GET; the HTTP layer omits the body.
+        if method not in {"GET", "HEAD"}:
+            return self._response(405, error_payload("API405", "this API is read-only"), Allow="GET, HEAD")
         if path == "/healthz":
             return self._response(
                 200,
@@ -129,7 +150,9 @@ class ApiService:
                 },
             )
         if not self._authorized(request_headers):
-            return self._response(401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"})
+            return self._response(
+                401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"}
+            )
         if path == "/v1/metadata":
             return self._response(200, self._metadata())
         if path == "/v1/records":
