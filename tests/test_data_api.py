@@ -210,6 +210,28 @@ class ApiServiceTests(unittest.TestCase):
         self.assertIn("Retry-After", response.headers)
         self.assertEqual(response.payload["error"]["details"]["window_seconds"], 60)
 
+    def test_retry_after_rounds_up_to_the_window_end(self) -> None:
+        limiter = _RateLimiter(1, window_seconds=60)
+        with patch("book_data_api.api.time.monotonic", return_value=100.0):
+            self.assertEqual(limiter.allow("c"), (True, 0))
+        with patch("book_data_api.api.time.monotonic", return_value=100.3):
+            # 59.7 s remain; 59 would send the client back while still limited.
+            self.assertEqual(limiter.allow("c"), (False, 60))
+
+    def test_invisible_only_strings_are_blank(self) -> None:
+        from book_data_api.schema import validate_record
+
+        record = {
+            "id": "r1",
+            "name": "\u200b\ufeff",
+            "category": "tools",
+            "observed_at": "2026-01-01T00:00:00Z",
+            "source_url": "https://example.test/r1",
+        }
+        with self.assertRaises(DataContractError) as ctx:
+            validate_record(record, index=0)
+        self.assertEqual(ctx.exception.details, {"field": "name"})
+
     def test_rate_limiter_sweeps_idle_clients(self) -> None:
         limiter = _RateLimiter(1, window_seconds=0.01)
         limiter.sweep_threshold = 8

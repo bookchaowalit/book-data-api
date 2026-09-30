@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -92,7 +93,9 @@ class _RateLimiter:
                 self._sweep(now)
             events = [event for event in self._events.get(client_id, []) if now - event < self.window_seconds]
             if len(events) >= self.max_requests:
-                retry_after = max(1, int(self.window_seconds - (now - events[0])))
+                # Round up: flooring (59.7 s -> 59) told clients to retry
+                # while the oldest request was still inside the window.
+                retry_after = max(1, math.ceil(self.window_seconds - (now - events[0])))
                 self._events[client_id] = events
                 return False, retry_after
             events.append(now)
