@@ -18,7 +18,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from book_data_api import cli
-from book_data_api.api import ApiService, _RateLimiter, create_server
+from book_data_api.api import ApiService, _RateLimiter, create_server, entity_tag, serialize_payload
 from book_data_api.schema import DataContractError
 from book_data_api.store import load_dataset
 
@@ -165,6 +165,37 @@ class ApiServiceTests(unittest.TestCase):
         self.assertEqual(self.service.handle("HEAD", "/v1/metadata").status, 401)
         self.assertEqual(self.service.handle("HEAD", "/v1/metadata", self.headers).status, 200)
 
+    def test_data_responses_carry_strong_etag_over_served_bytes(self) -> None:
+        response = self.service.handle("GET", "/v1/records/resource-001", self.headers)
+        self.assertEqual(response.status, 200)
+        self.assertEqual(response.headers["ETag"], entity_tag(serialize_payload(response.payload)))
+        self.assertRegex(response.headers["ETag"], r'^"[0-9a-f]{32}"$')
+        self.assertEqual(response.headers["Cache-Control"], "private, no-cache")
+        other = self.service.handle("GET", "/v1/records/resource-002", self.headers)
+        page = self.service.handle("GET", "/v1/records?limit=1", self.headers)
+        self.assertEqual(len({response.headers["ETag"], other.headers["ETag"], page.headers["ETag"]}), 3)
+        again = ApiService(load_dataset(REPOSITORY_ROOT), read_token=self.token)
+        self.assertEqual(again.handle("GET", "/v1/records/resource-001", self.headers).headers["ETag"],
+                         response.headers["ETag"])
+
+    def test_if_none_match_returns_304_only_when_authorised_and_matching(self) -> None:
+        etag = self.service.handle("GET", "/v1/metadata", self.headers).headers["ETag"]
+        for header in (etag, f"W/{etag}", f'"other", {etag}', "*"):
+            with self.subTest(header=header):
+                for method in ("GET", "HEAD"):
+                    hit = self.service.handle(method, "/v1/metadata", {**self.headers, "if-none-match": header})
+                    self.assertEqual(hit.status, 304)
+                    self.assertFalse(hit.has_body)
+                    self.assertEqual(hit.headers["ETag"], etag)
+        miss = self.service.handle("GET", "/v1/metadata", {**self.headers, "If-None-Match": '"stale"'})
+        self.assertEqual(miss.status, 200)
+        # Without a valid token the validator must not confirm anything.
+        denied = self.service.handle("GET", "/v1/metadata", {"If-None-Match": etag})
+        self.assertEqual(denied.status, 401)
+        self.assertNotIn("ETag", denied.headers)
+        self.assertNotIn("ETag", self.service.handle("GET", "/healthz").headers)
+        self.assertNotIn("ETag", self.service.handle("GET", "/v1/records/missing", self.headers).headers)
+
     def test_records_are_copies_not_shared_state(self) -> None:
         record = self.service.handle("GET", "/v1/records/resource-001", self.headers).payload["record"]
         record["name"] = "mutated by a caller"
@@ -209,6 +240,22 @@ class HttpServerTests(unittest.TestCase):
                 self.assertEqual(response.status, 200)
                 self.assertEqual(response.read(), b"")
                 self.assertGreater(int(response.headers["Content-Length"]), 0)
+
+            etag = response.headers["ETag"]
+            self.assertEqual(response.headers["Cache-Control"], "private, no-cache")
+            conditional = Request(url, headers={"Authorization": f"Bearer {token}", "If-None-Match": etag})
+            with self.assertRaises(HTTPError) as not_modified:
+                urlopen(conditional, timeout=3)
+            self.assertEqual(not_modified.exception.code, 304)
+            self.assertEqual(not_modified.exception.headers["ETag"], etag)
+            self.assertIsNone(not_modified.exception.headers["Content-Type"])
+            self.assertEqual(not_modified.exception.read(), b"")
+            not_modified.exception.close()
+
+            health = Request(f"http://127.0.0.1:{server.server_address[1]}/healthz")
+            with urlopen(health, timeout=3) as response:
+                self.assertEqual(response.headers["Cache-Control"], "no-store")
+                self.assertIsNone(response.headers["ETag"])
 
             post = Request(url, method="POST", data=b"{}", headers={"Authorization": f"Bearer {token}"})
             with self.assertRaises(HTTPError) as caught:

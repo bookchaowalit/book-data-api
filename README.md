@@ -79,6 +79,10 @@ curl -H "Authorization: Bearer $BOOK_DATA_API_TOKEN" \
 - `GET /v1/records/{id}` อ่าน record เดียวตาม id
 - รองรับ `HEAD` เหมือน `GET` แต่ไม่ส่ง body; method ที่เปลี่ยนข้อมูลตอบ `405` และ
   `Allow: GET, HEAD`
+- response ข้อมูลที่ผ่าน auth (`/v1/*` สถานะ 200) มี `ETag` แบบ strong (sha256 ของ
+  body ที่ส่งจริง) และ `Cache-Control: private, no-cache`; ส่ง `If-None-Match` มาจะได้
+  `304` ไม่มี body ถ้าตรง (รองรับ `W/`, list และ `*`); `/healthz` และ error ยังเป็น
+  `no-store` และไม่มี `ETag`; request ที่ไม่มี token ไม่ได้ 304
 - rate limit ต่อ client อยู่ในหน่วยความจำ และล้าง client ที่ไม่ active แล้วอัตโนมัติ
 - ข้อมูลที่ผิด contract หรือ digest ไม่ตรง manifest จะ fail closed
 - token ไม่อยู่ใน source, fixture หรือ manifest และไม่มี dependency ภายนอก

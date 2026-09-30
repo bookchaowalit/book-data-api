@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import logging
@@ -35,11 +36,40 @@ def access_log_record(method: str, target: str, status: int, latency_ms: float, 
     }
 
 
+def serialize_payload(payload: dict[str, Any]) -> bytes:
+    """Canonical JSON body; the ETag is computed over exactly these bytes."""
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+
+
+def entity_tag(body: bytes) -> str:
+    """Strong validator: changes whenever the served bytes change (data, lineage or API version)."""
+    return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+
+
+def _if_none_match_hit(header: str, etag: str) -> bool:
+    """RFC 9110 If-None-Match: weak comparison over a comma-separated list or ``*``."""
+    opaque = etag.removeprefix("W/")
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or candidate.removeprefix("W/") == opaque:
+            return True
+    return False
+
+
+# Data responses sit behind a bearer token: shared caches must not store them,
+# but the client may keep a copy and revalidate it with If-None-Match.
+DATA_CACHE_CONTROL = "private, no-cache"
+
+
 @dataclass(frozen=True)
 class Response:
     status: int
     payload: dict[str, Any]
     headers: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def has_body(self) -> bool:
+        return self.status != 304
 
 
 class _RateLimiter:
@@ -80,6 +110,14 @@ class _RateLimiter:
     def tracked_clients(self) -> int:
         with self._lock:
             return len(self._events)
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    wanted = name.casefold()
+    for key, value in headers.items():
+        if key.casefold() == wanted:
+            return value
+    return None
 
 
 class ApiService:
@@ -139,6 +177,25 @@ class ApiService:
         client_id: str = "local",
     ) -> Response:
         request_headers = headers or {}
+        response = self._route(method, target, request_headers, client_id)
+        path = urlsplit(target).path or "/"
+        if response.status != 200 or not path.startswith("/v1/"):
+            return response
+        # Conditional GET/HEAD for authorised data reads only (401s never reach here).
+        etag = entity_tag(serialize_payload(response.payload))
+        cache_headers = {**response.headers, "ETag": etag, "Cache-Control": DATA_CACHE_CONTROL}
+        if_none_match = _header(request_headers, "If-None-Match")
+        if if_none_match is not None and _if_none_match_hit(if_none_match, etag):
+            return self._response(304, {}, **cache_headers)
+        return self._response(200, response.payload, **cache_headers)
+
+    def _route(
+        self,
+        method: str,
+        target: str,
+        request_headers: dict[str, str],
+        client_id: str,
+    ) -> Response:
         allowed, retry_after = self._rate_limiter.allow(client_id)
         if not allowed:
             return self._response(
@@ -252,7 +309,7 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
             headers,
             client_id=self.client_address[0],
         )
-        body = json.dumps(response.payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        body = serialize_payload(response.payload) if response.has_body else b""
         # Logged before the response is sent, so the line exists by the time a client
         # sees the reply; latency covers request handling and serialisation.
         if ACCESS_LOGGER.isEnabledFor(logging.INFO):
@@ -262,13 +319,15 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
             )
             ACCESS_LOGGER.info(json.dumps(record, sort_keys=True))
         self.send_response(response.status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if response.has_body:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+        if "Cache-Control" not in response.headers:
+            self.send_header("Cache-Control", "no-store")
         for key, value in response.headers.items():
             self.send_header(key, value)
         self.end_headers()
-        if self.command != "HEAD":
+        if self.command != "HEAD" and body:
             self.wfile.write(body)
 
     def do_GET(self) -> None:
