@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from urllib.parse import urlencode
@@ -96,6 +97,8 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 2
             service = _service(args, read_token=token)
+            # One JSON access line per request on stderr (no headers, tokens or queries).
+            logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
             server = create_server(service, args.host, args.port)
             print(f"{server.server_address[0]}:{server.server_address[1]}", flush=True)
             try:

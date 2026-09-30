@@ -222,6 +222,55 @@ class HttpServerTests(unittest.TestCase):
             thread.join(timeout=3)
 
 
+class AccessLogTests(unittest.TestCase):
+    def test_access_log_is_structured_and_never_carries_secrets(self) -> None:
+        token = "access-log-token-generated-in-memory"
+        server = create_server(ApiService(load_dataset(REPOSITORY_ROOT), read_token=token), port=0)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            with self.assertLogs("book_data_api.access", level="INFO") as captured:
+                ok = Request(base + "/v1/records?category=developer-tools&limit=2",
+                             headers={"Authorization": f"Bearer {token}"})
+                with urlopen(ok, timeout=3) as response:
+                    body = response.read()
+                with self.assertRaises(HTTPError) as caught:
+                    urlopen(Request(base + "/v1/metadata", headers={"Authorization": "Bearer wrong-secret"}), timeout=3)
+                caught.exception.close()
+                head = Request(base + "/healthz", method="HEAD")
+                with urlopen(head, timeout=3):
+                    pass
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=3)
+
+        records = [json.loads(line.split(":", 2)[2]) for line in captured.output]
+        self.assertEqual([(r["method"], r["path"], r["status"]) for r in records], [
+            ("GET", "/v1/records", 200),
+            ("GET", "/v1/metadata", 401),
+            ("HEAD", "/healthz", 200),
+        ])
+        for record in records:
+            self.assertEqual(set(record), {"event", "method", "path", "status", "latency_ms", "bytes"})
+            self.assertGreaterEqual(record["latency_ms"], 0)
+        self.assertEqual(records[0]["bytes"], len(body))
+        self.assertEqual(records[2]["bytes"], 0)
+        joined = "\n".join(captured.output)
+        for secret in (token, "wrong-secret", "Bearer", "category=", "developer-tools"):
+            self.assertNotIn(secret, joined)
+
+    def test_long_paths_are_truncated_in_the_access_log(self) -> None:
+        from book_data_api.api import access_log_record
+
+        record = access_log_record("get", "/v1/records/" + "x" * 1000 + "?token=abc", 404, 1.23456, 10)
+        self.assertEqual(record["method"], "GET")
+        self.assertLessEqual(len(record["path"]), 256 + 3)
+        self.assertNotIn("token", json.dumps(record))
+        self.assertEqual(record["latency_ms"], 1.235)
+
+
 class CliTests(unittest.TestCase):
     def test_validate_command_is_machine_readable(self) -> None:
         env = dict(os.environ, PYTHONPATH=str(REPOSITORY_ROOT / "src"))

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import json
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
@@ -14,6 +15,24 @@ from urllib.parse import parse_qs, unquote, urlsplit
 from .config import API_VERSION, APP_NAME
 from .schema import error_payload
 from .store import Dataset, load_dataset
+
+ACCESS_LOGGER = logging.getLogger("book_data_api.access")
+_MAX_LOGGED_PATH = 256
+
+
+def access_log_record(method: str, target: str, status: int, latency_ms: float, body_bytes: int) -> dict[str, Any]:
+    """Structured access-log fields; never headers, tokens or query strings."""
+    path = urlsplit(target).path or "/"
+    if len(path) > _MAX_LOGGED_PATH:
+        path = path[:_MAX_LOGGED_PATH] + "..."
+    return {
+        "event": "http_access",
+        "method": method.upper()[:16],
+        "path": path,
+        "status": status,
+        "latency_ms": round(latency_ms, 3),
+        "bytes": body_bytes,
+    }
 
 
 @dataclass(frozen=True)
@@ -225,6 +244,7 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
     sys_version = ""
 
     def _dispatch(self) -> None:
+        started = time.perf_counter()
         headers = {key: value for key, value in self.headers.items()}
         response = self.server.service.handle(
             self.command,
@@ -233,6 +253,14 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
             client_id=self.client_address[0],
         )
         body = json.dumps(response.payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        # Logged before the response is sent, so the line exists by the time a client
+        # sees the reply; latency covers request handling and serialisation.
+        if ACCESS_LOGGER.isEnabledFor(logging.INFO):
+            sent = 0 if self.command == "HEAD" else len(body)
+            record = access_log_record(
+                self.command, self.path, response.status, (time.perf_counter() - started) * 1000, sent
+            )
+            ACCESS_LOGGER.info(json.dumps(record, sort_keys=True))
         self.send_response(response.status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -262,7 +290,7 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
         self._dispatch()
 
     def log_message(self, format: str, *args: Any) -> None:
-        """Keep the local test server quiet; callers own structured logs."""
+        """Silence the default stderr log; `_dispatch` emits a structured access log."""
 
 
 def create_server(service: ApiService, host: str = "127.0.0.1", port: int = 0) -> DataApiServer:
