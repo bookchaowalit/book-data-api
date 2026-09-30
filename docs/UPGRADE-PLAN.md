@@ -40,8 +40,8 @@
   ไม่มี body/Content-Type สำหรับ GET และ HEAD; ตรวจหลัง auth เท่านั้น จึงไม่มี 304 หรือ
   ETag ให้ request ที่ไม่มี token; `/healthz` และ error คง `no-store`
 - test ระดับ service และ HTTP จริง (25 tests); ruff 0.15.8/0.16.9 ผ่าน; `data/` ไม่ถูกแก้
-- `Retry-After` from the rate limiter was floored (59.7 s -> 59), so a
-  client that obeyed it was rejected again; it now rounds up. Record
-  strings made only of zero-width / BOM / soft-hyphen characters passed the
-  non-empty check (`str.strip()` keeps them); they are now `SCHEMA003`.
-  Two regression tests in `tests/test_data_api.py`.
+- `Retry-After` ของ rate limiter เคยปัดลง (เหลือ 59.7 วินาที -> 59) ทำให้
+  client ที่รอตามค่าที่บอกโดน 429 ซ้ำ; ตอนนี้ปัดขึ้น ค่า string ของ record ที่มี
+  แต่ zero-width / BOM / soft hyphen เคยผ่านการตรวจ non-empty
+  (`str.strip()` ไม่ตัดอักขระเหล่านี้) ตอนนี้เป็น `SCHEMA003`; เพิ่ม regression
+  test 2 ตัวใน `tests/test_data_api.py`
