@@ -54,7 +54,8 @@ PYTHONPATH=src python3 -m book_data_api.cli serve --port 8080
 ```
 
 หรือใช้ `--allow-unauthenticated-local` ได้เฉพาะการทดลอง local ที่ไม่มี
-credential; ตัวเลือกนี้ไม่ได้เปิดเป็นค่าเริ่มต้น
+credential; ตัวเลือกนี้ไม่ได้เปิดเป็นค่าเริ่มต้น และใช้ได้เฉพาะ `--host` แบบ loopback
+(ค่าเริ่มต้น `127.0.0.1`) ถ้า bind host อื่นต้องตั้ง `BOOK_DATA_API_TOKEN`
 
 `serve` เขียน access log แบบ JSON หนึ่งบรรทัดต่อ request ลง stderr ผ่าน logger
 `book_data_api.access` มีเฉพาะ `event`, `method`, `path` (ไม่มี query string,

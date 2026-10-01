@@ -5,7 +5,8 @@
 
 ## Backlog
 
-- P0: ยืนยันว่า GitHub Actions CI ผ่านใน push แรก และตั้งเป็น required check
+- P0: ตั้ง GitHub Actions `CI` เป็น required check (run ล่าสุดบน `claude/untitled-session-bhlj06`
+  ผ่านแล้ว แต่ run ก่อนหน้าบางครั้งจบใน ~5 วินาทีโดยไม่มี job log คือ runner ไม่ได้เริ่ม ไม่ใช่ test พัง)
 - P1: ตัดสินใจว่าจะเป็น API กลางของ `book-*-data` หรือไม่; ถ้าใช่ ให้เพิ่ม adapter
   อ่าน envelope ของ product เหล่านั้นแบบ read-only แยกตาม `schema_version`
 - P2: รองรับ `OPTIONS`/CORS แบบ allowlist ถ้ามี browser consumer
