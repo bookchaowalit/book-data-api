@@ -45,3 +45,11 @@
   แต่ zero-width / BOM / soft hyphen เคยผ่านการตรวจ non-empty
   (`str.strip()` ไม่ตัดอักขระเหล่านี้) ตอนนี้เป็น `SCHEMA003`; เพิ่ม regression
   test 2 ตัวใน `tests/test_data_api.py`
+- Route access matrix: `ROUTE_ACCESS` ใน `api.py` (`/healthz` public,
+  `/v1/metadata`, `/v1/records`, `/v1/records/{id}` ต้องใช้ read token) คือ
+  ตารางที่ `_route` ใช้ dispatch จริง; `tests/test_route_access.py` ตรึงตาราง
+  ห้าม method ที่เปลี่ยน state และยิงทุก route x 7 methods x (ไม่มี token,
+  token ผิด, token ถูก) -> 405 / 401 / 200 ตามระดับ
+- Network exposure: `serve --allow-unauthenticated-local` ปฏิเสธ `--host` ที่ไม่ใช่
+  loopback (`CONFIG002`) เดิมรันแบบไม่มี token บน `0.0.0.0` ได้; ค่า default ยังเป็น
+  `127.0.0.1` และ repo นี้ไม่มี compose/Dockerfile

@@ -10,7 +10,7 @@ import sys
 from urllib.parse import urlencode
 
 from .api import ApiService, create_server
-from .config import DEFAULT_HOST, DEFAULT_PORT, TOKEN_ENV
+from .config import DEFAULT_HOST, DEFAULT_PORT, LOOPBACK_HOSTS, TOKEN_ENV
 from .schema import DataContractError
 from .store import load_dataset
 
@@ -92,6 +92,18 @@ def main(argv: list[str] | None = None) -> int:
                         "error": {
                             "code": "CONFIG001",
                             "message": f"set {TOKEN_ENV} or pass --allow-unauthenticated-local for local development",
+                        }
+                    }
+                )
+                return 2
+            if token is None and args.host not in LOOPBACK_HOSTS:
+                # Unauthenticated mode is for this machine only: never serve
+                # the data openly on a LAN or public interface.
+                _print(
+                    {
+                        "error": {
+                            "code": "CONFIG002",
+                            "message": f"--allow-unauthenticated-local requires a loopback --host; set {TOKEN_ENV} to bind {args.host}",
                         }
                     }
                 )

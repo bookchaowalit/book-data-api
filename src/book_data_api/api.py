@@ -115,6 +115,31 @@ class _RateLimiter:
             return len(self._events)
 
 
+# Route access matrix: every route the API serves, with who may call it.
+# "public" needs nothing; "reader" needs `Authorization: Bearer
+# $BOOK_DATA_API_TOKEN` when a token is configured. Every route is read-only
+# (READ_METHODS); `_route` dispatches through this table and
+# tests/test_route_access.py pins it.
+PUBLIC = "public"
+READER = "reader"
+READ_METHODS = frozenset({"GET", "HEAD"})
+ROUTE_ACCESS: dict[str, str] = {
+    "/healthz": PUBLIC,
+    "/v1/metadata": READER,
+    "/v1/records": READER,
+    "/v1/records/{id}": READER,
+}
+
+
+def route_pattern(path: str) -> str | None:
+    """The ROUTE_ACCESS key serving ``path``, or None (404)."""
+    if path in ROUTE_ACCESS and "{" not in path:
+        return path
+    if path.startswith("/v1/records/"):
+        return "/v1/records/{id}"
+    return None
+
+
 def _header(headers: dict[str, str], name: str) -> str | None:
     wanted = name.casefold()
     for key, value in headers.items():
@@ -212,12 +237,17 @@ class ApiService:
         parsed = urlsplit(target)
         path = parsed.path or "/"
         method = method.upper()
-        if path not in {"/healthz", "/v1/metadata", "/v1/records"} and not path.startswith("/v1/records/"):
+        pattern = route_pattern(path)
+        if pattern is None:
             return self._response(404, error_payload("API404", "route not found"))
         # HEAD is the body-less form of GET; the HTTP layer omits the body.
-        if method not in {"GET", "HEAD"}:
+        if method not in READ_METHODS:
             return self._response(405, error_payload("API405", "this API is read-only"), Allow="GET, HEAD")
-        if path == "/healthz":
+        if ROUTE_ACCESS[pattern] != PUBLIC and not self._authorized(request_headers):
+            return self._response(
+                401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"}
+            )
+        if pattern == "/healthz":
             return self._response(
                 200,
                 {
@@ -227,10 +257,6 @@ class ApiService:
                     "storage": "local_bronze_fixture",
                     "schema_version": self.dataset.schema_version,
                 },
-            )
-        if not self._authorized(request_headers):
-            return self._response(
-                401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"}
             )
         if path == "/v1/metadata":
             return self._response(200, self._metadata())
