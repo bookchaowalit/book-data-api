@@ -26,7 +26,8 @@ make demo
 
 ## Observed result
 
-- `make test`: ผ่าน 8 tests
+- `make test`: ผ่าน 21 tests (2026-09-30; เพิ่ม lineage tamper, path traversal, HEAD,
+  query validation, CLI และ rate-limit sweep)
 - `make check`: compile และ `validate` ผ่าน
 - `make demo`: คืน metadata และ `resource-001` ตาม filter ที่กำหนด
 - HTTP smoke test: อ่าน `resource-002` ได้ด้วย status `200`

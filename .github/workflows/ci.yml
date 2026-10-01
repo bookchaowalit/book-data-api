@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install dev tools
+        run: python -m pip install "pytest>=7" "ruff>=0.5"
+      - name: Lint
+        run: ruff check .
+      - name: Tests (stdlib only, loopback HTTP, no network)
+        run: python -m pytest -q
+      - name: Fixture lineage check and demo
+        run: |
+          make check PYTHON=python
+          make demo PYTHON=python > /dev/null
+      - name: Fixtures unchanged by the run
+        run: git diff --exit-code -- data

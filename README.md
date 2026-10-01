@@ -34,6 +34,18 @@ make check
 make demo
 ```
 
+ตรวจแบบเดียวกับ CI (`.github/workflows/ci.yml`, Python 3.11/3.12):
+
+```bash
+python -m pip install "pytest>=7" "ruff>=0.5"
+ruff check .
+python -m pytest -q
+make check && make demo
+```
+
+test ที่ทดสอบ fixture เสียหายจะคัดลอก `data/` ไปยัง temporary directory ก่อน
+จึงไม่แก้ไฟล์ fixture จริง และ CI ตรวจซ้ำด้วย `git diff --exit-code -- data`
+
 เปิด HTTP server โดยสร้าง token เฉพาะ runtime ใน shell:
 
 ```bash
@@ -42,7 +54,13 @@ PYTHONPATH=src python3 -m book_data_api.cli serve --port 8080
 ```
 
 หรือใช้ `--allow-unauthenticated-local` ได้เฉพาะการทดลอง local ที่ไม่มี
-credential; ตัวเลือกนี้ไม่ได้เปิดเป็นค่าเริ่มต้น
+credential; ตัวเลือกนี้ไม่ได้เปิดเป็นค่าเริ่มต้น และใช้ได้เฉพาะ `--host` แบบ loopback
+(ค่าเริ่มต้น `127.0.0.1`) ถ้า bind host อื่นต้องตั้ง `BOOK_DATA_API_TOKEN`
+
+`serve` เขียน access log แบบ JSON หนึ่งบรรทัดต่อ request ลง stderr ผ่าน logger
+`book_data_api.access` มีเฉพาะ `event`, `method`, `path` (ไม่มี query string,
+ตัดที่ 256 ตัวอักษร), `status`, `latency_ms` และ `bytes` โดยไม่ log header,
+token หรือ query
 
 ตัวอย่างการอ่าน:
 
@@ -60,7 +78,13 @@ curl -H "Authorization: Bearer $BOOK_DATA_API_TOKEN" \
 - `GET /v1/metadata` แสดง schema, count และ lineage
 - `GET /v1/records` รองรับ `category`, `limit` และ `offset`
 - `GET /v1/records/{id}` อ่าน record เดียวตาม id
-- method ที่เปลี่ยนข้อมูลตอบ `405` และ `Allow: GET`
+- รองรับ `HEAD` เหมือน `GET` แต่ไม่ส่ง body; method ที่เปลี่ยนข้อมูลตอบ `405` และ
+  `Allow: GET, HEAD`
+- response ข้อมูลที่ผ่าน auth (`/v1/*` สถานะ 200) มี `ETag` แบบ strong (sha256 ของ
+  body ที่ส่งจริง) และ `Cache-Control: private, no-cache`; ส่ง `If-None-Match` มาจะได้
+  `304` ไม่มี body ถ้าตรง (รองรับ `W/`, list และ `*`); `/healthz` และ error ยังเป็น
+  `no-store` และไม่มี `ETag`; request ที่ไม่มี token ไม่ได้ 304
+- rate limit ต่อ client อยู่ในหน่วยความจำ และล้าง client ที่ไม่ active แล้วอัตโนมัติ
 - ข้อมูลที่ผิด contract หรือ digest ไม่ตรง manifest จะ fail closed
 - token ไม่อยู่ใน source, fixture หรือ manifest และไม่มี dependency ภายนอก
 

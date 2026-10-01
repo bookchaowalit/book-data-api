@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import os
 import sys
 from urllib.parse import urlencode
 
 from .api import ApiService, create_server
-from .config import DEFAULT_HOST, DEFAULT_PORT, TOKEN_ENV
+from .config import DEFAULT_HOST, DEFAULT_PORT, LOOPBACK_HOSTS, TOKEN_ENV
 from .schema import DataContractError
 from .store import load_dataset
 
@@ -95,7 +96,21 @@ def main(argv: list[str] | None = None) -> int:
                     }
                 )
                 return 2
+            if token is None and args.host not in LOOPBACK_HOSTS:
+                # Unauthenticated mode is for this machine only: never serve
+                # the data openly on a LAN or public interface.
+                _print(
+                    {
+                        "error": {
+                            "code": "CONFIG002",
+                            "message": f"--allow-unauthenticated-local requires a loopback --host; set {TOKEN_ENV} to bind {args.host}",
+                        }
+                    }
+                )
+                return 2
             service = _service(args, read_token=token)
+            # One JSON access line per request on stderr (no headers, tokens or queries).
+            logging.basicConfig(level=logging.INFO, format="%(message)s", stream=sys.stderr)
             server = create_server(service, args.host, args.port)
             print(f"{server.server_address[0]}:{server.server_address[1]}", flush=True)
             try:

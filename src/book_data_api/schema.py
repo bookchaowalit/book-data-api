@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Any
 
@@ -30,8 +31,13 @@ def _object(value: Any, *, code: str, message: str) -> dict[str, Any]:
     return value
 
 
+# Zero-width space/joiners, word joiner, BOM and soft hyphen: invisible and not
+# removed by ``str.strip()``, so "\u200b" used to count as a non-empty value.
+_INVISIBLE = re.compile("[\u00ad\u200b-\u200d\u2060\ufeff]")
+
+
 def _non_empty_string(value: Any, *, field: str, code: str) -> str:
-    if not isinstance(value, str) or not value.strip():
+    if not isinstance(value, str) or not _INVISIBLE.sub("", value).strip():
         raise DataContractError(code, f"{field} must be a non-empty string", {"field": field})
     return value
 

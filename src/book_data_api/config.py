@@ -7,6 +7,7 @@ API_VERSION = "v1"
 SCHEMA_VERSION = "resource.v1"
 DATASET_NAME = "reference_resources"
 DEFAULT_HOST = "127.0.0.1"
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 DEFAULT_PORT = 8080
 TOKEN_ENV = "BOOK_DATA_API_TOKEN"
 

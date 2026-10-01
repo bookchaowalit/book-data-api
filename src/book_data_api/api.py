@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
+import logging
+import math
 import threading
 import time
 from dataclasses import dataclass, field
@@ -12,8 +15,51 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from .config import API_VERSION, APP_NAME
-from .schema import DataContractError, error_payload
+from .schema import error_payload
 from .store import Dataset, load_dataset
+
+ACCESS_LOGGER = logging.getLogger("book_data_api.access")
+_MAX_LOGGED_PATH = 256
+
+
+def access_log_record(method: str, target: str, status: int, latency_ms: float, body_bytes: int) -> dict[str, Any]:
+    """Structured access-log fields; never headers, tokens or query strings."""
+    path = urlsplit(target).path or "/"
+    if len(path) > _MAX_LOGGED_PATH:
+        path = path[:_MAX_LOGGED_PATH] + "..."
+    return {
+        "event": "http_access",
+        "method": method.upper()[:16],
+        "path": path,
+        "status": status,
+        "latency_ms": round(latency_ms, 3),
+        "bytes": body_bytes,
+    }
+
+
+def serialize_payload(payload: dict[str, Any]) -> bytes:
+    """Canonical JSON body; the ETag is computed over exactly these bytes."""
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+
+
+def entity_tag(body: bytes) -> str:
+    """Strong validator: changes whenever the served bytes change (data, lineage or API version)."""
+    return '"' + hashlib.sha256(body).hexdigest()[:32] + '"'
+
+
+def _if_none_match_hit(header: str, etag: str) -> bool:
+    """RFC 9110 If-None-Match: weak comparison over a comma-separated list or ``*``."""
+    opaque = etag.removeprefix("W/")
+    for candidate in header.split(","):
+        candidate = candidate.strip()
+        if candidate == "*" or candidate.removeprefix("W/") == opaque:
+            return True
+    return False
+
+
+# Data responses sit behind a bearer token: shared caches must not store them,
+# but the client may keep a copy and revalidate it with If-None-Match.
+DATA_CACHE_CONTROL = "private, no-cache"
 
 
 @dataclass(frozen=True)
@@ -22,9 +68,17 @@ class Response:
     payload: dict[str, Any]
     headers: dict[str, str] = field(default_factory=dict)
 
+    @property
+    def has_body(self) -> bool:
+        return self.status != 304
+
 
 class _RateLimiter:
-    def __init__(self, max_requests: int, window_seconds: float = 60.0) -> None:
+    # Idle clients are swept once this many are tracked, so unique client ids
+    # (for example many source addresses) cannot grow memory without bound.
+    sweep_threshold = 1024
+
+    def __init__(self, max_requests: int, window_seconds: float = 60) -> None:
         if max_requests < 1:
             raise ValueError("max_requests must be positive")
         self.max_requests = max_requests
@@ -35,14 +89,63 @@ class _RateLimiter:
     def allow(self, client_id: str) -> tuple[bool, int]:
         now = time.monotonic()
         with self._lock:
+            if len(self._events) >= self.sweep_threshold and client_id not in self._events:
+                self._sweep(now)
             events = [event for event in self._events.get(client_id, []) if now - event < self.window_seconds]
             if len(events) >= self.max_requests:
-                retry_after = max(1, int(self.window_seconds - (now - events[0])))
+                # Round up: flooring (59.7 s -> 59) told clients to retry
+                # while the oldest request was still inside the window.
+                retry_after = max(1, math.ceil(self.window_seconds - (now - events[0])))
                 self._events[client_id] = events
                 return False, retry_after
             events.append(now)
             self._events[client_id] = events
             return True, 0
+
+    def _sweep(self, now: float) -> None:
+        for key in list(self._events):
+            recent = [event for event in self._events[key] if now - event < self.window_seconds]
+            if recent:
+                self._events[key] = recent
+            else:
+                del self._events[key]
+
+    def tracked_clients(self) -> int:
+        with self._lock:
+            return len(self._events)
+
+
+# Route access matrix: every route the API serves, with who may call it.
+# "public" needs nothing; "reader" needs `Authorization: Bearer
+# $BOOK_DATA_API_TOKEN` when a token is configured. Every route is read-only
+# (READ_METHODS); `_route` dispatches through this table and
+# tests/test_route_access.py pins it.
+PUBLIC = "public"
+READER = "reader"
+READ_METHODS = frozenset({"GET", "HEAD"})
+ROUTE_ACCESS: dict[str, str] = {
+    "/healthz": PUBLIC,
+    "/v1/metadata": READER,
+    "/v1/records": READER,
+    "/v1/records/{id}": READER,
+}
+
+
+def route_pattern(path: str) -> str | None:
+    """The ROUTE_ACCESS key serving ``path``, or None (404)."""
+    if path in ROUTE_ACCESS and "{" not in path:
+        return path
+    if path.startswith("/v1/records/"):
+        return "/v1/records/{id}"
+    return None
+
+
+def _header(headers: dict[str, str], name: str) -> str | None:
+    wanted = name.casefold()
+    for key, value in headers.items():
+        if key.casefold() == wanted:
+            return value
+    return None
 
 
 class ApiService:
@@ -102,22 +205,49 @@ class ApiService:
         client_id: str = "local",
     ) -> Response:
         request_headers = headers or {}
+        response = self._route(method, target, request_headers, client_id)
+        path = urlsplit(target).path or "/"
+        if response.status != 200 or not path.startswith("/v1/"):
+            return response
+        # Conditional GET/HEAD for authorised data reads only (401s never reach here).
+        etag = entity_tag(serialize_payload(response.payload))
+        cache_headers = {**response.headers, "ETag": etag, "Cache-Control": DATA_CACHE_CONTROL}
+        if_none_match = _header(request_headers, "If-None-Match")
+        if if_none_match is not None and _if_none_match_hit(if_none_match, etag):
+            return self._response(304, {}, **cache_headers)
+        return self._response(200, response.payload, **cache_headers)
+
+    def _route(
+        self,
+        method: str,
+        target: str,
+        request_headers: dict[str, str],
+        client_id: str,
+    ) -> Response:
         allowed, retry_after = self._rate_limiter.allow(client_id)
         if not allowed:
             return self._response(
                 429,
-                error_payload("RATE001", "rate limit exceeded", {"window_seconds": 60}),
+                error_payload(
+                    "RATE001", "rate limit exceeded", {"window_seconds": self._rate_limiter.window_seconds}
+                ),
                 **{"Retry-After": str(retry_after)},
             )
 
         parsed = urlsplit(target)
         path = parsed.path or "/"
         method = method.upper()
-        if path not in {"/healthz", "/v1/metadata", "/v1/records"} and not path.startswith("/v1/records/"):
+        pattern = route_pattern(path)
+        if pattern is None:
             return self._response(404, error_payload("API404", "route not found"))
-        if method != "GET":
-            return self._response(405, error_payload("API405", "this API is read-only"), **{"Allow": "GET"})
-        if path == "/healthz":
+        # HEAD is the body-less form of GET; the HTTP layer omits the body.
+        if method not in READ_METHODS:
+            return self._response(405, error_payload("API405", "this API is read-only"), Allow="GET, HEAD")
+        if ROUTE_ACCESS[pattern] != PUBLIC and not self._authorized(request_headers):
+            return self._response(
+                401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"}
+            )
+        if pattern == "/healthz":
             return self._response(
                 200,
                 {
@@ -128,8 +258,6 @@ class ApiService:
                     "schema_version": self.dataset.schema_version,
                 },
             )
-        if not self._authorized(request_headers):
-            return self._response(401, error_payload("AUTH001", "Bearer authentication required"), **{"WWW-Authenticate": "Bearer"})
         if path == "/v1/metadata":
             return self._response(200, self._metadata())
         if path == "/v1/records":
@@ -202,6 +330,7 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
     sys_version = ""
 
     def _dispatch(self) -> None:
+        started = time.perf_counter()
         headers = {key: value for key, value in self.headers.items()}
         response = self.server.service.handle(
             self.command,
@@ -209,15 +338,25 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
             headers,
             client_id=self.client_address[0],
         )
-        body = json.dumps(response.payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8")
+        body = serialize_payload(response.payload) if response.has_body else b""
+        # Logged before the response is sent, so the line exists by the time a client
+        # sees the reply; latency covers request handling and serialisation.
+        if ACCESS_LOGGER.isEnabledFor(logging.INFO):
+            sent = 0 if self.command == "HEAD" else len(body)
+            record = access_log_record(
+                self.command, self.path, response.status, (time.perf_counter() - started) * 1000, sent
+            )
+            ACCESS_LOGGER.info(json.dumps(record, sort_keys=True))
         self.send_response(response.status)
-        self.send_header("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        if response.has_body:
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+        if "Cache-Control" not in response.headers:
+            self.send_header("Cache-Control", "no-store")
         for key, value in response.headers.items():
             self.send_header(key, value)
         self.end_headers()
-        if self.command != "HEAD":
+        if self.command != "HEAD" and body:
             self.wfile.write(body)
 
     def do_GET(self) -> None:
@@ -239,7 +378,7 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
         self._dispatch()
 
     def log_message(self, format: str, *args: Any) -> None:
-        """Keep the local test server quiet; callers own structured logs."""
+        """Silence the default stderr log; `_dispatch` emits a structured access log."""
 
 
 def create_server(service: ApiService, host: str = "127.0.0.1", port: int = 0) -> DataApiServer:

@@ -20,7 +20,7 @@
 - เมื่อกำหนด `BOOK_DATA_API_TOKEN` แล้ว endpoint ใต้ `/v1` ต้องใช้
   `Authorization: Bearer ...`; `/healthz` ไม่เปิด record data
 - CLI server จะหยุดก่อน bind หากไม่มี token เว้นแต่ผู้ใช้ระบุ
-  `--allow-unauthenticated-local`
+  `--allow-unauthenticated-local` ซึ่งยอมรับเฉพาะ `--host` แบบ loopback
 - rate limit เป็น in-memory per-client guard สำหรับ baseline ไม่ใช่ distributed
   quota หรือ security perimeter
 - ใช้ Python standard library เท่านั้น เพื่อลด dependency และให้การทดสอบ
