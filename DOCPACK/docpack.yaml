@@ -1,0 +1,8 @@
+system_id: bookchaowalit/book-apps/tools/book-data-api
+prefix: CARD
+brand: "BOOK DATA API"
+subtitle: "reference app ขนาดเล็กสุดของ api-tool: อ่าน resource แบบมี version และ manifest"
+footer: "Book Data API — Product Card"
+color: "#2f4b6e"
+audience: internal
+tier: L0
