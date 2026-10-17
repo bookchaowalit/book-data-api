@@ -133,4 +133,3 @@ def validate_manifest(value: Any) -> dict[str, Any]:
     if manifest["dataset"] != DATASET_NAME:
         raise DataContractError("LINEAGE016", "manifest dataset is unsupported", {"expected": DATASET_NAME})
     return manifest
-

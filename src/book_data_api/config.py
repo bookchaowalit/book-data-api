@@ -14,4 +14,3 @@ TOKEN_ENV = "BOOK_DATA_API_TOKEN"
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PACKAGE_ROOT.parent
 MANIFEST_PATH = REPOSITORY_ROOT / "data" / "manifests" / "resource_records.v1.manifest.json"
-

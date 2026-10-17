@@ -1,33 +1,38 @@
+# CI + security baseline (DevSecOps Phase 1). Public repository: GitHub-hosted runners.
 name: CI
 
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ["3.11", "3.12"]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dev tools
-        run: python -m pip install "pytest>=7" "ruff>=0.5"
-      - name: Lint
-        run: ruff check .
-      - name: Tests (stdlib only, loopback HTTP, no network)
-        run: python -m pytest -q
-      - name: Fixture lineage check and demo
-        run: |
-          make check PYTHON=python
-          make demo PYTHON=python > /dev/null
-      - name: Fixtures unchanged by the run
-        run: git diff --exit-code -- data
+  # requires-python >= 3.11; the previous CI tested 3.11 and 3.12, so both stay.
+  api-py311:
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/ci-python.yml@c37ef9d113eefb3ed45429717cb7ca201192c3fc # v1.0.1
+    with:
+      python-version: "3.11"
+      # Same gates as the previous CI: pytest (stdlib only, loopback HTTP, no network), fixture
+      # lineage check and demo, and the run must leave the fixtures unchanged.
+      test-command: &gates >-
+        python -m pytest -q
+        && make check PYTHON=python
+        && make demo PYTHON=python > /dev/null
+        && git diff --exit-code -- data
+
+  api-py312:
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/ci-python.yml@c37ef9d113eefb3ed45429717cb7ca201192c3fc # v1.0.1
+    with:
+      python-version: "3.12"
+      test-command: *gates
+
+  security:
+    uses: bookchaowalit/platform-ci-workflows/.github/workflows/security.yml@c37ef9d113eefb3ed45429717cb7ca201192c3fc # v1.0.1

@@ -56,7 +56,9 @@ class StoreContractTests(unittest.TestCase):
     def test_tampered_bronze_digest_fails_closed(self) -> None:
         with fixture_copy() as root:
             bronze = root / "data" / "bronze" / "resource_records.v1.json"
-            bronze.write_text(bronze.read_text(encoding="utf-8").replace("Ledger Lens", "Ledger Lies"), encoding="utf-8")
+            bronze.write_text(
+                bronze.read_text(encoding="utf-8").replace("Ledger Lens", "Ledger Lies"), encoding="utf-8"
+            )
             with self.assertRaises(DataContractError) as caught:
                 load_dataset(root)
             self.assertEqual(caught.exception.code, "LINEAGE002")
@@ -117,7 +119,9 @@ class ApiServiceTests(unittest.TestCase):
     def test_records_are_filterable_and_paginated(self) -> None:
         response = self.service.handle("GET", "/v1/records?category=developer-tools&limit=1", self.headers)
         self.assertEqual(response.status, 200)
-        self.assertEqual(response.payload["pagination"], {"limit": 1, "offset": 0, "total": 1, "returned": 1, "has_more": False})
+        self.assertEqual(
+            response.payload["pagination"], {"limit": 1, "offset": 0, "total": 1, "returned": 1, "has_more": False}
+        )
         self.assertEqual(response.payload["records"][0]["id"], "resource-001")
         self.assertEqual(response.payload["schema_version"], "resource.v1")
 
@@ -175,8 +179,9 @@ class ApiServiceTests(unittest.TestCase):
         page = self.service.handle("GET", "/v1/records?limit=1", self.headers)
         self.assertEqual(len({response.headers["ETag"], other.headers["ETag"], page.headers["ETag"]}), 3)
         again = ApiService(load_dataset(REPOSITORY_ROOT), read_token=self.token)
-        self.assertEqual(again.handle("GET", "/v1/records/resource-001", self.headers).headers["ETag"],
-                         response.headers["ETag"])
+        self.assertEqual(
+            again.handle("GET", "/v1/records/resource-001", self.headers).headers["ETag"], response.headers["ETag"]
+        )
 
     def test_if_none_match_returns_304_only_when_authorised_and_matching(self) -> None:
         etag = self.service.handle("GET", "/v1/metadata", self.headers).headers["ETag"]
@@ -300,8 +305,9 @@ class AccessLogTests(unittest.TestCase):
         base = f"http://127.0.0.1:{server.server_address[1]}"
         try:
             with self.assertLogs("book_data_api.access", level="INFO") as captured:
-                ok = Request(base + "/v1/records?category=developer-tools&limit=2",
-                             headers={"Authorization": f"Bearer {token}"})
+                ok = Request(
+                    base + "/v1/records?category=developer-tools&limit=2", headers={"Authorization": f"Bearer {token}"}
+                )
                 with urlopen(ok, timeout=3) as response:
                     body = response.read()
                 with self.assertRaises(HTTPError) as caught:
@@ -316,11 +322,14 @@ class AccessLogTests(unittest.TestCase):
             thread.join(timeout=3)
 
         records = [json.loads(line.split(":", 2)[2]) for line in captured.output]
-        self.assertEqual([(r["method"], r["path"], r["status"]) for r in records], [
-            ("GET", "/v1/records", 200),
-            ("GET", "/v1/metadata", 401),
-            ("HEAD", "/healthz", 200),
-        ])
+        self.assertEqual(
+            [(r["method"], r["path"], r["status"]) for r in records],
+            [
+                ("GET", "/v1/records", 200),
+                ("GET", "/v1/metadata", 401),
+                ("HEAD", "/healthz", 200),
+            ],
+        )
         for record in records:
             self.assertEqual(set(record), {"event", "method", "path", "status", "latency_ms", "bytes"})
             self.assertGreaterEqual(record["latency_ms"], 0)
