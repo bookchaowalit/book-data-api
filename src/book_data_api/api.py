@@ -228,9 +228,7 @@ class ApiService:
         if not allowed:
             return self._response(
                 429,
-                error_payload(
-                    "RATE001", "rate limit exceeded", {"window_seconds": self._rate_limiter.window_seconds}
-                ),
+                error_payload("RATE001", "rate limit exceeded", {"window_seconds": self._rate_limiter.window_seconds}),
                 **{"Retry-After": str(retry_after)},
             )
 
@@ -383,4 +381,3 @@ class DataApiRequestHandler(BaseHTTPRequestHandler):
 
 def create_server(service: ApiService, host: str = "127.0.0.1", port: int = 0) -> DataApiServer:
     return DataApiServer((host, port), service)
-
